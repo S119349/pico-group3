@@ -1,0 +1,96 @@
+#include <emc/io.h>
+#include <emc/rate.h>
+#include <cmath>
+#include <iostream>
+#include <unistd.h>
+
+struct Variables{   //structure containing variables, which can be accessed from the whole program
+    double time;    //contains time, which is the time during which it will do a certain action, like turning
+}vars;              //named vars
+
+struct Jazz {       //the speeds in different all directions of the robot
+    double vx;
+    double vy;
+    double va;
+} jazz;
+
+
+int main()
+{
+    emc::IO io;
+    emc::Rate r(10); // set the frequency here
+    vars.time = 0.0;
+
+
+    while(io.ok())  //while connected
+    {
+        if(vars.time<=0)    //so if the action time is over, go back to driving normally
+        {
+            jazz.vx=0.1;
+            jazz.vy=0;
+            jazz.va=0;
+        }
+
+        io.sendBaseReference(jazz.vx,jazz.vy,jazz.va);  //acces the variables from the jazz, to drive in the direction specified
+
+        emc::LaserData scan;  //scan contains all the data from the laser array
+
+        if(io.readLaserData(scan))  //reads scan every loop
+        {
+            //std::cout<<scan.ranges[900]<<std::endl; //writes out the distance of one of the sensors
+            for(int n=0;n<=scan.ranges.size();n++)   //reads all 1000 sensor datas
+            {
+                if(scan.ranges[n]<0.2)      //range for stopping, collision detection
+                {
+                    io.sendBaseReference(0,0,0);    //stop
+                    double angle = scan.angle_increment*n+scan.angle_min; //angle of the sensor detecting collision, relative to the robot
+
+                    return 0; //ends the program
+                }
+                if(vars.time <= 0)  //only detects if no action, like turning, is active
+                {
+                if(std::abs(scan.ranges[n+1]-scan.ranges[n])>0.4 && n>100 && n<900) //detects if two subsequent sensors differ more than 40 cm, so it is an opening
+                {
+
+                    double angle = scan.angle_increment*n+scan.angle_min;       //angle of the sensor detecting the opening
+                    double diff = std::abs(scan.ranges[n+1]-scan.ranges[n]);    //difference between the sensors
+
+                    if(n<500) //if the detecting sensor is on the left half
+                    {
+                        std::cout << "Opening on the left at: " << angle << "\n" ;
+                        jazz.vx = 0.3;  //forward velocity
+                        jazz.va = 0.2;  //angular velocity for now I've set these to 0.3 and 0.2, they should be determined based on the data of the side corridor
+                        vars.time = (0.5*3.14)/0.2; //determines the time needed to make a 90 degree turn
+                    }
+                    else
+                    {
+                        std::cout << "Opening on the right at: " << angle << "\n" ;
+                        jazz.vx = 0.3;  //forward velocity
+                        jazz.va = -0.2;  //angular velocity for now I've set these to 0.3 and 0.2, they should be determined based on the data of the side corridor
+                        vars.time = (0.5*3.14)/0.2; //determines the time needed to make a 90 degree turn
+                    }
+                }
+                }
+                else if(n<350 && scan.ranges[n]<0.4) //if a sensor on the left is within a certain range of a wall while turning, it moves in the opposite direction
+                {
+                    jazz.vy = 0.1;
+                }
+                else if(n>650 && scan.ranges[n]<0.4)
+                {
+                    jazz.vy = -0.1;
+                }
+                else
+                {
+                    jazz.vy = 0;
+                }
+            }
+        }
+        if(vars.time>0) //decreasing the action time by the time used for this loop, because of the r.sleep() command
+        {
+            vars.time -= 0.1;
+        }
+        r.sleep();
+    }
+
+    return 0;
+}
